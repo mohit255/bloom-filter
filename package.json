@@ -1,0 +1,19 @@
+{
+  "name": "bloom-filter-username-check",
+  "version": "1.0.0",
+  "description": "Username availability API over 10M usernames using a bloom filter in front of Postgres",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "seed": "node scripts/seed.js",
+    "start": "node src/server.js",
+    "bench": "node scripts/bench.js",
+    "compare": "node scripts/compare.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
+}
