@@ -49,10 +49,13 @@ npm run seed      # 10M usernames → Postgres + data/usernames.bloom (14 MB), ~
 npm start         # http://localhost:3000
 npm run bench     # in-process latency + measured false-positive rate
 npm run compare   # HTTP load test: bloom endpoint vs direct-DB endpoint (server must be running)
+npm run load      # fixed-rate load test: 1000 requests/minute for 60s (server must be running)
 npm test          # 12 tests (API tests run against bloom_usernames_test)
 ```
 
 The `users` table is created automatically on first connect. `node scripts/seed.js 1000000` seeds a smaller dataset.
+
+`npm run load -- <rate> <min|sec> <seconds>` runs any fixed rate, e.g. `npm run load -- 1000 sec 60` for 1000 requests/second.
 
 Env vars:
 - `DATABASE_URL` (default `postgres://localhost:5432/bloom_usernames`)
@@ -108,7 +111,8 @@ References are `file:line`. If the code changes, these line numbers will drift.
 | `src/config.js` | Settings: capacity 12M, false-positive rate 1%, file paths. |
 | `scripts/seed.js` | Generates the 10M usernames. |
 | `scripts/bench.js` | Measures lookup speed and the real false-positive rate. |
-| `scripts/compare.js` | Load-tests the Bloom endpoint against the direct-DB endpoint. |
+| `scripts/compare.js` | Load-tests the Bloom endpoint against the direct-DB endpoint, sending as fast as possible. |
+| `scripts/load.js` | Sends requests at a fixed rate (e.g. 1000/minute) and reports response times. |
 
 ```
 Startup: server.js:73 → loadOrBuildBloom (usernames.js:20) → load the saved file, or add all 10M names
@@ -331,6 +335,34 @@ Local Postgres answers in ~0.05 ms, so it never becomes the bottleneck here. Aga
 How the comparison is kept fair:
 - Every workload is run through both endpoints once before measuring. Taken names are sampled from all over the table, and without this warm-up, whichever endpoint ran first paid ~3× for reading cold pages from disk.
 - Results were checked with the endpoint order reversed and came out the same.
+
+### Response time at a fixed rate (`npm run load`)
+
+`compare` sends requests as fast as possible. `load` sends them on a fixed schedule, the way real traffic arrives, and records how long each response takes. It doesn't wait for earlier requests to finish, so a slow server shows up as longer response times instead of fewer requests sent. Traffic is 90% free names and 10% taken names, run for 60s against each endpoint.
+
+**1000 requests per minute** (16.7 per second, 1,000 requests per endpoint):
+
+| Endpoint | p50 | p90 | p99 | Slowest | Errors | Postgres queries |
+|---|---|---|---|---|---|---|
+| `/availability` (Bloom) | **1.95 ms** | 2.48 ms | **3.33 ms** | 7.7 ms | 0 | **103** |
+| `/availability/db` | 2.53 ms | 3.15 ms | 4.50 ms | 22.3 ms | 0 | 1,000 |
+
+**1000 requests per second** (60,000 requests per endpoint):
+
+| Endpoint | p50 | p90 | p99 | Slowest | Errors | Postgres queries |
+|---|---|---|---|---|---|---|
+| `/availability` (Bloom) | **0.37 ms** | 0.76 ms | 3.00 ms | 95 ms | 0 | **6,217** |
+| `/availability/db` | 0.56 ms | 0.88 ms | 1.97 ms | 39 ms | 0 | 60,000 |
+
+p50 is the typical response time. p90 and p99 mean 90% and 99% of responses were at least that fast.
+
+- **1000 requests per minute is light load.** Both endpoints served every request without errors, all in under 25 ms.
+- **The Bloom endpoint sends about 10× fewer queries to Postgres:** 103 vs 1,000, and 6,217 vs 60,000.
+- **Free names are faster than taken names.** At 1000/second, free names took 0.35 ms (filter only) and taken names 0.78 ms (they need a Postgres lookup).
+- **The Bloom endpoint's p99 was slower at 1000/second** (3.0 ms vs 1.97 ms). The cause isn't confirmed. The Bloom endpoint runs first in this script, and run order skewed results in `compare` before.
+- **Responses were faster at 1000/second than at 1000/minute.** At low traffic the laptop idles between requests. The likely reason is that the CPU slows down while idle and the Postgres process has to wake up for each query. This wasn't tested directly.
+
+All of this ran on one laptop: server, Postgres and load generator together.
 
 ## Durability
 
